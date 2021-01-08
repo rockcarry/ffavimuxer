@@ -128,7 +128,7 @@ typedef struct {
 } AVI_FILE;
 #pragma pack()
 
-void* avimuxer_init(char *fname, int duration, int w, int h, int fps, int gop, int channels, int samprate, int sampbits, int sampnum, unsigned char *aacspecinfo)
+void* avimuxer_init(char *fname, int duration, int w, int h, int fps, int channels, int samprate, int sampbits, int sampnum, int h265)
 {
     AVI_FILE *avi = calloc(1, sizeof(AVI_FILE));
     if (!avi) goto failed;
@@ -173,8 +173,8 @@ void* avimuxer_init(char *fname, int duration, int w, int h, int fps, int gop, i
     avi->slist2_size = 4 + 4 + 4 + sizeof(STREAM_HEADER) + 4 + 4 + sizeof(BITMAP_FORMAT);
 
     memcpy(avi->strhdr2, "strh", 4);
-    memcpy(avi->strhdr_video.fcc_type , "vids", 4);
-    memcpy(avi->strhdr_video.fcc_codec, "H264", 4);
+    memcpy(avi->strhdr_video.fcc_type, "vids", 4);
+    memcpy(avi->strhdr_video.fcc_codec, h265 ? "HEV1" : "H264", 4);
     avi->strhdr2_size                   = sizeof(STREAM_HEADER);
     avi->strhdr_video.scale             = 1;
     avi->strhdr_video.rate              = fps;
@@ -187,7 +187,7 @@ void* avimuxer_init(char *fname, int duration, int w, int h, int fps, int gop, i
     avi->strfmt_video.height            = h;
     avi->strfmt_video.planes            = 1;
     avi->strfmt_video.bitcount          = 24;
-    avi->strfmt_video.compression       = ('H' << 0) | ('2' << 8) | ('6' << 16) | ('4' << 24);
+    avi->strfmt_video.compression       = h265 ? (('H' << 0) | ('E' << 8) | ('V' << 16) | ('1' << 24)) : (('H' << 0) | ('2' << 8) | ('6' << 16) | ('4' << 24));
     avi->strfmt_video.image_size        = w * h * 3;
 
     memcpy(avi->hlist    , "LIST", 4);
