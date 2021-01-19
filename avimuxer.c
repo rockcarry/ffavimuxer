@@ -4,6 +4,10 @@
 #include <stdio.h>
 #include "avimuxer.h"
 
+#ifdef WIN32
+#pragma warning(disable:4996)
+#endif
+
 #define AVIF_HASINDEX      (1 << 4)
 #define AVIF_ISINTERLEAVED (1 << 8)
 #define AVIIF_KEYFRAME     (1 << 4)
@@ -80,7 +84,6 @@ typedef struct {
     uint32_t      framesize_fix;
     uint32_t      framesize_idx;
     uint32_t      framesize_max;
-    uint32_t      cur_offset_val;
     FILE         *fp;
 
     char          riff[4];
@@ -119,25 +122,22 @@ typedef struct {
     uint32_t      strfmt2_size;
     BITMAP_FORMAT strfmt_video;
 
-    char          idx1[4];
-    uint32_t      idx1_size;
-
     char          mlist[4];
     uint32_t      mlist_size;
     char          type_movi[4];
 } AVI_FILE;
 #pragma pack()
 
-void* avimuxer_init(char *fname, int duration, int w, int h, int fps, int channels, int samprate, int sampbits, int sampnum, int h265)
+void* avimuxer_init(char *fname, int duration, int w, int h, int fps, int sampnum, int h265)
 {
+    int samprate = 8000, channels = 1, sampbits = 8;
     AVI_FILE *avi = calloc(1, sizeof(AVI_FILE));
     if (!avi) goto failed;
     avi->fp = fopen(fname, "wb");
     if (!avi->fp) goto failed;
 
-    sampbits = 8; // we only support pcm alaw, so set sampbits to 8
     memcpy(avi->avih, "avih", 4);
-    avi->avih_size = sizeof(AVI_HEADER);
+    avi->avih_size                      = sizeof(AVI_HEADER);
     avi->avi_header.microsec_per_frame  = 1000000 / fps;
     avi->avi_header.maxbytes_per_Sec    = w * h * 3;
     avi->avi_header.flags               = AVIF_ISINTERLEAVED|AVIF_HASINDEX;
@@ -145,10 +145,6 @@ void* avimuxer_init(char *fname, int duration, int w, int h, int fps, int channe
     avi->avi_header.width               = w;
     avi->avi_header.height              = h;
     avi->avi_header.suggested_bufsize   = w * h * 3;
-
-    memcpy(avi->slist1   , "LIST", 4);
-    memcpy(avi->type_str1, "strl", 4);
-    avi->slist1_size = 4 + 4 + 4 + sizeof(STREAM_HEADER) + 4 + 4 + sizeof(WAVE_FORMAT);
 
     memcpy(avi->strhdr1, "strh", 4);
     memcpy(avi->strhdr_audio.fcc_type , "auds", 4);
@@ -168,9 +164,9 @@ void* avimuxer_init(char *fname, int duration, int w, int h, int fps, int channe
     avi->strfmt_audio.block_align       = channels * sampbits / 8;
     avi->strfmt_audio.bits_per_sample   = sampbits;
 
-    memcpy(avi->slist2   , "LIST", 4);
-    memcpy(avi->type_str2, "strl", 4);
-    avi->slist2_size = 4 + 4 + 4 + sizeof(STREAM_HEADER) + 4 + 4 + sizeof(BITMAP_FORMAT);
+    memcpy(avi->slist1   , "LIST", 4);
+    memcpy(avi->type_str1, "strl", 4);
+    avi->slist1_size = 4 + 4 + 4 + avi->strhdr1_size + 4 + 4 + avi->strfmt1_size;
 
     memcpy(avi->strhdr2, "strh", 4);
     memcpy(avi->strhdr_video.fcc_type, "vids", 4);
@@ -190,27 +186,22 @@ void* avimuxer_init(char *fname, int duration, int w, int h, int fps, int channe
     avi->strfmt_video.compression       = h265 ? (('H' << 0) | ('E' << 8) | ('V' << 16) | ('1' << 24)) : (('H' << 0) | ('2' << 8) | ('6' << 16) | ('4' << 24));
     avi->strfmt_video.image_size        = w * h * 3;
 
-    memcpy(avi->hlist    , "LIST", 4);
-    memcpy(avi->type_hdrl, "hdrl", 4);
-    avi->hlist_size = 4 + 8 + avi->avih_size + 8 + avi->slist1_size + 8 + avi->slist2_size;
-
-    memcpy(avi->mlist    , "LIST", 4);
-    memcpy(avi->type_movi, "movi", 4);
-    avi->mlist_size = 0;
+    memcpy(avi->slist2   , "LIST", 4);
+    memcpy(avi->type_str2, "strl", 4);
+    avi->slist2_size = 4 + 4 + 4 + avi->strhdr2_size + 4 + 4 + avi->strfmt2_size;
 
     memcpy(avi->riff     , "RIFF", 4);
     memcpy(avi->type_avi , "AVI ", 4);
-    avi->riff_size  = 0;
+    memcpy(avi->hlist    , "LIST", 4);
+    memcpy(avi->type_hdrl, "hdrl", 4);
+    memcpy(avi->mlist    , "LIST", 4);
+    memcpy(avi->type_movi, "movi", 4);
+    avi->hlist_size = 4 + 8 + avi->avih_size + 8 + avi->slist1_size + 8 + avi->slist2_size;
 
     if (duration == 0) duration = 10 * 60 * 1000; // default duration is 10min
     avi->framesize_max = duration * fps / 1000 + fps / 2 + duration * samprate / 1000 / sampnum + samprate / sampnum / 2;
     avi->framesize_lst = malloc(avi->framesize_max * sizeof(uint32_t));
-    memcpy(avi->idx1, "idx1", 4);
-    avi->idx1_size = avi->framesize_max * 4 * sizeof(uint32_t);
-    fwrite(&avi->riff , offsetof(AVI_FILE, mlist) - offsetof(AVI_FILE, riff), 1, avi->fp);
-    fseek (avi->fp, avi->idx1_size, SEEK_CUR);
-    fwrite(&avi->mlist, sizeof(AVI_FILE) - offsetof(AVI_FILE, mlist), 1, avi->fp);
-    avi->cur_offset_val = sizeof(avi->type_movi);
+    fwrite(&avi->riff, sizeof(AVI_FILE) - offsetof(AVI_FILE, riff), 1, avi->fp);
     return avi;
 
 failed:
@@ -218,23 +209,30 @@ failed:
     return NULL;
 }
 
-static void avimuxer_fix_data(AVI_FILE *avi)
+static void avimuxer_fix_data(AVI_FILE *avi, int flag)
 {
-    uint32_t data;
-    fseek(avi->fp, offsetof(AVI_FILE, mlist) - offsetof(AVI_FILE, riff) + avi->framesize_fix * 4 * sizeof(uint32_t), SEEK_SET);
-    while (avi->framesize_fix < avi->framesize_idx) {
-        fwrite((avi->framesize_lst[avi->framesize_fix] & AVI_VIDEO_FRAME) ? "01dc" : "00wb", 4, 1, avi->fp);
-        data = (avi->framesize_lst[avi->framesize_fix] & AVI_KEY_FRAME) ? AVIIF_KEYFRAME : 0;
-        fwrite(&data, 4, 1, avi->fp);
-        data = avi->cur_offset_val;
-        fwrite(&data, 4, 1, avi->fp);
-        data = avi->framesize_lst ? avi->framesize_lst[avi->framesize_fix] & 0x3fffffff : 0;
-        fwrite(&data, 4, 1, avi->fp);
-        avi->cur_offset_val += data + 8;
-        avi->framesize_fix++;
+    uint32_t data, idx1size, movisize, curpos = 4;
+
+    if (flag) {
+        movisize = ftell(avi->fp) - (offsetof(AVI_FILE, type_movi) - offsetof(AVI_FILE, riff));
+        if (movisize & 1) { movisize++; fputc(0, avi->fp); }
+        fwrite("idx1", 4, 1, avi->fp);
+        idx1size = avi->framesize_idx * sizeof(uint32_t) * 4;
+        fwrite(&idx1size , 4, 1, avi->fp);
+        while (avi->framesize_fix < avi->framesize_idx) {
+            fwrite((avi->framesize_lst[avi->framesize_fix] & AVI_VIDEO_FRAME) ? "01dc" : "00wb", 4, 1, avi->fp);
+            data = (avi->framesize_lst[avi->framesize_fix] & AVI_KEY_FRAME  ) ? AVIIF_KEYFRAME : 0;
+            fwrite(&data, 4, 1, avi->fp);
+            data = curpos;
+            fwrite(&data, 4, 1, avi->fp);
+            data = avi->framesize_lst ? avi->framesize_lst[avi->framesize_fix] & 0x3fffffff : 0;
+            fwrite(&data, 4, 1, avi->fp);
+            curpos += data + 8;
+            avi->framesize_fix++;
+        }
     }
 
-    data = (offsetof(AVI_FILE, type_movi) - offsetof(AVI_FILE, type_avi)) + avi->idx1_size + avi->cur_offset_val;
+    data = ftell(avi->fp) - 8;
     fseek(avi->fp, offsetof(AVI_FILE, riff_size) - offsetof(AVI_FILE, riff), SEEK_SET);
     fwrite(&data, 4, 1, avi->fp);
 
@@ -251,9 +249,11 @@ static void avimuxer_fix_data(AVI_FILE *avi)
     fseek(avi->fp, offsetof(AVI_FILE, strhdr_video.length) - offsetof(AVI_FILE, riff), SEEK_SET);
     fwrite(&data, 4, 1, avi->fp);
 
-    data = avi->cur_offset_val;
-    fseek(avi->fp, offsetof(AVI_FILE, mlist_size) - offsetof(AVI_FILE, riff) + avi->idx1_size, SEEK_SET);
-    fwrite(&data, 4, 1, avi->fp);
+    if (flag) {
+        fseek(avi->fp, offsetof(AVI_FILE, mlist_size) - offsetof(AVI_FILE, riff), SEEK_SET);
+        fwrite(&movisize, 4, 1, avi->fp);
+    }
+
     fseek(avi->fp, 0, SEEK_END);
 }
 
@@ -262,7 +262,7 @@ void avimuxer_exit(void *ctxt)
     AVI_FILE *avi = (AVI_FILE*)ctxt;
     if (avi) {
         if (avi->fp) {
-            avimuxer_fix_data(avi);
+            avimuxer_fix_data(avi, 1);
             fclose(avi->fp);
         }
         free(avi->framesize_lst);
@@ -295,12 +295,8 @@ void avimuxer_video(void *ctxt, unsigned char *buf, int len, int key, unsigned p
             avi->framesize_lst[avi->framesize_idx++] = len | AVI_VIDEO_FRAME | (key << 30);
         }
         avi->strhdr_video.length++;
-
-        fflush(avi->fp);
-#if 0
-        if (avi->strhdr_video.length % (avi->strhdr_video.rate * 5) == 0) {
-            avimuxer_fix_data(avi);
-        }
-#endif
+    }
+    if (avi->strhdr_video.length % (avi->strhdr_video.rate * 5) == 0) {
+        avimuxer_fix_data(avi, 0);
     }
 }
